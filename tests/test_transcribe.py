@@ -147,7 +147,7 @@ def test_format_transcript():
     out = transcribe.format_transcript(
         [{"start": 0.0, "end": 4.2, "text": "hi"}, {"start": 65.0, "end": 70.0, "text": "later"}]
     )
-    assert out == "[0:00–0:04] hi\n[1:05–1:10] later"
+    assert out == "[0:00-0:04] hi\n[1:05-1:10] later"
 
 
 @requires_ffmpeg

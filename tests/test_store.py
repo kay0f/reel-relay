@@ -23,7 +23,7 @@ def test_create_and_get(tmp_db):
 
 def test_mark_ready_roundtrip(tmp_db):
     reel_id = store.create_reel("https://example.com/reel/2")
-    transcript = [{"start": 0.0, "end": 1.5, "text": "héllo — unicode ok"}]
+    transcript = [{"start": 0.0, "end": 1.5, "text": "héllo - unicode ok"}]
     store.mark_ready(
         reel_id,
         title="Test reel",

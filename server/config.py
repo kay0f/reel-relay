@@ -43,5 +43,5 @@ def require_secrets() -> None:
         raise RuntimeError(
             f"Missing required env vars: {', '.join(missing)}. Run `make secrets` "
             "(or generate values with `python3 -c \"import secrets; print(secrets.token_urlsafe(32))\"` "
-            "and put them in .env — see .env.example)."
+            "and put them in .env - see .env.example)."
         )

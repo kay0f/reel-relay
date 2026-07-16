@@ -141,7 +141,7 @@ def run_pipeline(reel_id: str, url: str) -> None:
         log.info(
             "[%s] ready: %d frames, %d transcript segments (%s)%s",
             reel_id, len(manifest), len(transcript), source,
-            f" — warning: {warning}" if warning else "",
+            f" - warning: {warning}" if warning else "",
         )
     except Exception as e:  # noqa: BLE001 - background task must record its own failure
         log.exception("[%s] ingest failed", reel_id)

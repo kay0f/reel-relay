@@ -61,7 +61,7 @@ def parse_vtt(text: str) -> list[dict]:
         bound = timing_idx[k + 1] if k + 1 < len(timing_idx) else len(lines)
         payload = lines[i + 1 : bound]
         # the line directly before the next timing line is that cue's id (e.g. "2")
-        # when it follows a blank line — don't treat it as this cue's text
+        # when it follows a blank line - don't treat it as this cue's text
         if k + 1 < len(timing_idx) and payload:
             j = bound - 1
             if lines[j].strip() and (j - 1 <= i or not lines[j - 1].strip()):
@@ -115,7 +115,7 @@ def parse_groq_verbose_json(data: dict) -> list[dict]:
 
 
 def extract_audio(video: Path, out_mp3: Path) -> Path:
-    """Mono 16 kHz 64 kbps mp3 — small enough for Groq's upload limits."""
+    """Mono 16 kHz 64 kbps mp3 - small enough for Groq's upload limits."""
     proc = subprocess.run(
         [
             "ffmpeg", "-v", "error",
@@ -157,4 +157,4 @@ def _fmt_ts(seconds: float) -> str:
 def format_transcript(segments: list[dict]) -> str:
     if not segments:
         return "(no transcript available)"
-    return "\n".join(f"[{_fmt_ts(s['start'])}–{_fmt_ts(s['end'])}] {s['text']}" for s in segments)
+    return "\n".join(f"[{_fmt_ts(s['start'])}-{_fmt_ts(s['end'])}] {s['text']}" for s in segments)

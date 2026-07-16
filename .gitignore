@@ -16,4 +16,4 @@ ops/rendered/
 # OS cruft
 .DS_Store
 
-# NOTE: .env.example is intentionally NOT ignored — it is the config template.
+# NOTE: .env.example is intentionally NOT ignored - it is the config template.

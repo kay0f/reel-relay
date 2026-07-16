@@ -28,7 +28,7 @@ mcp = FastMCP(
         "Instagram reels (and other short videos) the user shared from their phone. "
         "Each reel is stored as a timestamped transcript plus video frames, so you can "
         "'watch' it. When the user says 'the reel I just shared/sent you', call get_reel "
-        "with no reel_id — that returns the most recent one. Use list_recent_reels to "
+        "with no reel_id - that returns the most recent one. Use list_recent_reels to "
         "browse, and get_reel_frames to zoom into a specific time window."
     ),
 )
@@ -58,7 +58,7 @@ def _reel_or_message(reel_id: str | None) -> tuple[dict | None, str | None]:
     if newest["status"] == "pending":
         msg = (
             f"The most recently shared reel (id {newest['id']}, shared {newest['created_at']}) "
-            "is still processing — try again in ~30s."
+            "is still processing - try again in ~30s."
         )
     else:
         msg = (
@@ -68,7 +68,7 @@ def _reel_or_message(reel_id: str | None) -> tuple[dict | None, str | None]:
     if ready is not None:
         msg += (
             f" The most recent *ready* reel is '{ready.get('title') or ready['url']}' "
-            f"(id {ready['id']}) — pass that id explicitly if you want it."
+            f"(id {ready['id']}) - pass that id explicitly if you want it."
         )
     return None, msg
 
@@ -90,7 +90,7 @@ def _reel_header(reel: dict) -> str:
 def _frame_blocks(reel: dict, entries: list[dict]) -> tuple[str, list]:
     """Base64 the given manifest entries; returns (summary line, interleaved blocks).
 
-    Each image is immediately preceded by its own timestamp label — one aggregate
+    Each image is immediately preceded by its own timestamp label - one aggregate
     timestamp list would force the model to count ordinally across many unlabeled
     images, which reliably misattributes times.
     """
@@ -107,7 +107,7 @@ def _frame_blocks(reel: dict, entries: list[dict]) -> tuple[str, list]:
         return "No frames available.", []
     blocks: list = []
     for n, (t, image) in enumerate(loaded, start=1):
-        blocks.append(TextContent(type="text", text=f"[frame {n}/{len(loaded)} — t={t:g}s]"))
+        blocks.append(TextContent(type="text", text=f"[frame {n}/{len(loaded)} - t={t:g}s]"))
         blocks.append(image)
     summary = (
         f"{len(loaded)} frames follow in chronological order, each preceded by a "
@@ -137,7 +137,7 @@ def list_recent_reels(limit: int = 10) -> list[dict]:
                 "created_at": r["created_at"],
                 "status": r["status"],
                 "duration_s": r.get("duration_s"),
-                "transcript_preview": (preview[:200] + "…") if len(preview) > 200 else preview,
+                "transcript_preview": (preview[:200] + "...") if len(preview) > 200 else preview,
                 "error": r.get("error"),
             }
         )
@@ -148,9 +148,9 @@ def list_recent_reels(limit: int = 10) -> list[dict]:
 def get_reel(reel_id: str | None = None, include_frames: bool = True, max_frames: int = 10):
     """Watch a reel the user shared: full timestamped transcript + frames from the video.
 
-    Call with NO reel_id to get the most recently shared reel — do this when the user
+    Call with NO reel_id to get the most recently shared reel - do this when the user
     says "the reel I just shared/sent you". Frames are evenly sampled JPEG images in
-    chronological order, each preceded by a timestamp label — treat them as the visual
+    chronological order, each preceded by a timestamp label - treat them as the visual
     storyline of the video. The default 10 frames is an overview; call get_reel_frames
     for a closer look at a specific time window instead of raising max_frames.
     Set include_frames=false for transcript-only.
@@ -181,7 +181,7 @@ def get_reel_frames(
 ):
     """Get frames from one time window of a reel (e.g. 10s-25s) to look closer.
 
-    Useful after get_reel when you need more visual detail about a specific moment —
+    Useful after get_reel when you need more visual detail about a specific moment -
     e.g. a step in a recipe or an exercise's form. reel_id defaults to the most
     recently shared reel. Timestamps are in seconds from the start of the video.
     """
@@ -206,7 +206,7 @@ def get_reel_frames(
         ]
     max_frames = max(1, min(int(max_frames), 20))
     summary, frame_blocks = _frame_blocks(reel, evenly_sample(window, max_frames))
-    header = f"Reel '{reel.get('title') or reel['url']}' — window {start_s:g}s-{end_s:g}s. {summary}"
+    header = f"Reel '{reel.get('title') or reel['url']}' - window {start_s:g}s-{end_s:g}s. {summary}"
     return [TextContent(type="text", text=header), *frame_blocks]
 
 
@@ -227,7 +227,7 @@ async def lifespan(app: FastAPI):
         log.warning("marked %d reel(s) stuck in 'pending' from a previous run as failed", stale)
     # never log the full token: the MCP path is the connector's only credential
     log.info(
-        "MCP endpoint ready at http://%s:%s/mcp-%s…/mcp (run `make mcp-url` for the full URL)",
+        "MCP endpoint ready at http://%s:%s/mcp-%s.../mcp (run `make mcp-url` for the full URL)",
         config.HOST, config.PORT, config.MCP_PATH_TOKEN[:4],
     )
     async with mcp_app.lifespan(app):

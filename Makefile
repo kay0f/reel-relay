@@ -21,7 +21,7 @@ secrets: ## create .env from the example and fill empty secrets with random valu
 	@grep -q '^INGEST_SECRET=..*' .env || sed -i '' "s|^INGEST_SECRET=.*|INGEST_SECRET=$$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')|" .env
 	@grep -q '^MCP_PATH_TOKEN=..*' .env || sed -i '' "s|^MCP_PATH_TOKEN=.*|MCP_PATH_TOKEN=$$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')|" .env
 	@echo ".env ready (add your GROQ_API_KEY if it is still empty):"
-	@grep -E '^(GROQ_API_KEY|INGEST_SECRET|MCP_PATH_TOKEN)=' .env | sed -E 's/=(.{1,6}).+/=\1…/'
+	@grep -E '^(GROQ_API_KEY|INGEST_SECRET|MCP_PATH_TOKEN)=' .env | sed -E 's/=(.{1,6}).+/=\1.../'
 
 mcp-url: ## print the MCP URL to register as a Claude custom connector
 	@echo "Local:  http://$(HOST):$(PORT)/mcp-$(MCP_PATH_TOKEN)/mcp"

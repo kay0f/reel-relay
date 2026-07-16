@@ -19,8 +19,8 @@ You'll need two values from your Mac (from `reel-relay/.env`):
 6. Add action **Get Contents of URL** and configure it (tap the ▸ arrow):
    - **URL**: `https://reels.example.com/ingest`  ← your hostname
    - **Method**: `POST`
-   - **Headers**: add one — Key `X-Ingest-Secret`, Value `<your INGEST_SECRET>`
-   - **Request Body**: `JSON`, add one field — Key `url`, Type `Text`,
+   - **Headers**: add one - Key `X-Ingest-Secret`, Value `<your INGEST_SECRET>`
+   - **Request Body**: `JSON`, add one field - Key `url`, Type `Text`,
      Value = the **URLs** variable from step 5.
 7. Add action **Show Notification**:
    - Title: `Reel sent to Claude`
@@ -29,9 +29,9 @@ You'll need two values from your Mac (from `reel-relay/.env`):
 ## Use it
 
 1. In Instagram, open a reel → tap the **share arrow** → **Share to...** (or the ⋯ row)
-   → **Send Reel to Claude**. (First time: scroll the share sheet and tap **Edit Actions…**
+   → **Send Reel to Claude**. (First time: scroll the share sheet and tap **Edit Actions...**
    / **More** to enable the shortcut.)
-2. Wait ~15–60 seconds for download + transcription.
+2. Wait ~15-60 seconds for download + transcription.
 3. In any Claude app with the connector enabled, say: *"Check out the reel I just shared."*
 
 ## Fallback: clipboard variant
@@ -42,9 +42,9 @@ variant of the shortcut where step 5's input is **Clipboard** instead of Shortcu
 
 ## Troubleshooting
 
-- **Notification shows `{"detail":"missing or invalid X-Ingest-Secret header"}`** — the
+- **Notification shows `{"detail":"missing or invalid X-Ingest-Secret header"}`** - the
   header name/value in step 6 doesn't match `INGEST_SECRET` in `.env`.
-- **No response / timeout** — tunnel or server down on the Mac. Check
+- **No response / timeout** - tunnel or server down on the Mac. Check
   `launchctl list | grep reelrelay` and `data/logs/`.
-- **Reel stays `pending` then `failed`** — check `data/logs/server.err.log`; some reels
+- **Reel stays `pending` then `failed`** - check `data/logs/server.err.log`; some reels
   require Instagram login (see `YTDLP_COOKIES_FROM_BROWSER` in the main README).
