@@ -1,9 +1,10 @@
-"""Download + processing pipeline: yt-dlp -> frames -> transcript -> SQLite."""
+"""Download + processing pipeline: yt-dlp (page URL) or direct media -> frames -> transcript -> SQLite."""
 import logging
 import shutil
 import tempfile
 from pathlib import Path
 
+import httpx
 from yt_dlp import YoutubeDL
 from yt_dlp.utils import DownloadError
 
@@ -71,6 +72,24 @@ def download_video(url: str, workdir: Path) -> tuple[Path, dict]:
     return path, info
 
 
+def download_media(url: str, out_path: Path) -> Path:
+    """Stream a direct (CDN) video URL to disk.
+
+    Used by the Instagram DM webhook, where Meta hands us a signed video URL
+    instead of a page to scrape. No yt-dlp needed - it's already the media.
+    """
+    with httpx.stream(
+        "GET", url, follow_redirects=True, timeout=httpx.Timeout(180.0, connect=15.0)
+    ) as r:
+        r.raise_for_status()
+        with open(out_path, "wb") as f:
+            for chunk in r.iter_bytes(chunk_size=1 << 16):
+                f.write(chunk)
+    if not out_path.exists() or out_path.stat().st_size == 0:
+        raise RuntimeError("downloaded media file is empty")
+    return out_path
+
+
 def find_caption_file(workdir: Path) -> Path | None:
     """Pick the best caption file: plain 'en', then 'en-orig', then anything else."""
     def rank(p: Path) -> tuple:
@@ -103,12 +122,37 @@ def _build_transcript(video: Path, workdir: Path) -> tuple[list[dict], str, str 
         return [], "none", f"transcription failed: {e}"
 
 
-def run_pipeline(reel_id: str, url: str) -> None:
-    """Background task: download, extract frames + transcript, persist.
+def _process_video(
+    reel_id: str, video: Path, workdir: Path, *, title: str, uploader: str, duration: float
+) -> None:
+    """Shared core: extract frames + transcript, then persist. Raises on frames failure."""
+    frames_dir = config.FRAMES_ROOT / reel_id
+    if frames_dir.exists():
+        shutil.rmtree(frames_dir)
+    manifest = extract_frames(video, frames_dir)
+    if not manifest:
+        raise RuntimeError("no frames could be extracted")
 
-    Status becomes 'ready' (possibly with a warning in `error` when only the
-    transcript failed) or 'failed' when download/frames fail.
-    """
+    transcript, source, warning = _build_transcript(video, workdir)
+    store.mark_ready(
+        reel_id,
+        title=title,
+        uploader=uploader,
+        duration_s=round(duration, 2),
+        transcript=transcript,
+        transcript_source=source,
+        frames_dir=str(frames_dir),
+        warning=warning,
+    )
+    log.info(
+        "[%s] ready: %d frames, %d transcript segments (%s)%s",
+        reel_id, len(manifest), len(transcript), source,
+        f" - warning: {warning}" if warning else "",
+    )
+
+
+def run_pipeline(reel_id: str, url: str) -> None:
+    """Background task (share-sheet / manual URL): yt-dlp download, then process."""
     log.info("[%s] ingest started: %s", reel_id, url)
     workdir = Path(tempfile.mkdtemp(prefix=f"reel-{reel_id}-"))
     frames_dir = config.FRAMES_ROOT / reel_id
@@ -120,31 +164,32 @@ def run_pipeline(reel_id: str, url: str) -> None:
             duration = ffprobe_duration(video)
         except Exception:  # noqa: BLE001
             duration = float(info.get("duration") or 0.0)
-
-        if frames_dir.exists():
-            shutil.rmtree(frames_dir)
-        manifest = extract_frames(video, frames_dir)
-        if not manifest:
-            raise RuntimeError("no frames could be extracted")
-
-        transcript, source, warning = _build_transcript(video, workdir)
-        store.mark_ready(
-            reel_id,
-            title=title,
-            uploader=uploader,
-            duration_s=round(duration, 2),
-            transcript=transcript,
-            transcript_source=source,
-            frames_dir=str(frames_dir),
-            warning=warning,
-        )
-        log.info(
-            "[%s] ready: %d frames, %d transcript segments (%s)%s",
-            reel_id, len(manifest), len(transcript), source,
-            f" - warning: {warning}" if warning else "",
-        )
+        _process_video(reel_id, video, workdir, title=title, uploader=uploader, duration=duration)
     except Exception as e:  # noqa: BLE001 - background task must record its own failure
         log.exception("[%s] ingest failed", reel_id)
+        store.mark_failed(reel_id, f"{type(e).__name__}: {e}")
+        shutil.rmtree(frames_dir, ignore_errors=True)
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
+def run_pipeline_media(reel_id: str, media_url: str, title: str = "") -> None:
+    """Background task (Instagram DM webhook): download a direct CDN video URL, then process."""
+    log.info("[%s] ingest started (DM webhook)", reel_id)
+    workdir = Path(tempfile.mkdtemp(prefix=f"reel-{reel_id}-"))
+    frames_dir = config.FRAMES_ROOT / reel_id
+    try:
+        video = download_media(media_url, workdir / "video.mp4")
+        try:
+            duration = ffprobe_duration(video)
+        except Exception:  # noqa: BLE001
+            duration = 0.0
+        _process_video(
+            reel_id, video, workdir,
+            title=(title or "Shared Instagram reel"), uploader="", duration=duration,
+        )
+    except Exception as e:  # noqa: BLE001 - background task must record its own failure
+        log.exception("[%s] DM ingest failed", reel_id)
         store.mark_failed(reel_id, f"{type(e).__name__}: {e}")
         shutil.rmtree(frames_dir, ignore_errors=True)
     finally:

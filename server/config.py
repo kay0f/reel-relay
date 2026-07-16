@@ -22,6 +22,11 @@ PORT = int(os.getenv("PORT", "8787"))
 # e.g. YTDLP_COOKIES_FROM_BROWSER=safari (or chrome, firefox...). Off by default.
 YTDLP_COOKIES_FROM_BROWSER = os.getenv("YTDLP_COOKIES_FROM_BROWSER", "")
 
+# Instagram DM webhook (Phase 1) - optional, only needed for the "share a reel to a
+# bot Instagram account" ingestion path. When both are set, /webhook is active.
+META_APP_SECRET = os.getenv("META_APP_SECRET", "")        # verifies X-Hub-Signature-256
+META_VERIFY_TOKEN = os.getenv("META_VERIFY_TOKEN", "")    # for the GET webhook handshake
+
 # Frame extraction tuning
 FRAME_WIDTH = 512          # output JPEG width in px
 FRAMES_TARGET = 36         # ~30-40 frames for a <=60s reel

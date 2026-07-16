@@ -43,7 +43,7 @@ what's *shown*.
 
 ## Features
 
-- **Native share-gesture ingestion** - an iOS Shortcut in your share sheet, no app to install. (Instagram-DM webhook ingestion is on the [roadmap](#roadmap).)
+- **Two ways to ingest** - an iOS Shortcut in your share sheet, or (more robust) share a reel to a bot Instagram account and let Meta's DM webhook push it straight to your server ([setup](docs/instagram-webhook.md)).
 - **Claude actually "watches" the video** - timestamped transcript + evenly-sampled, deduplicated frames delivered as MCP image content.
 - **Three MCP tools** tuned so Claude knows to grab "the reel I just shared" with zero ceremony.
 - **Free transcription** via Groq's `whisper-large-v3` (falls back to it only when a reel has no captions).
@@ -134,7 +134,7 @@ All settings come from environment variables (see [`.env.example`](.env.example)
 
 ## Roadmap
 
-- **Phase 1 - Instagram DM webhook ingestion.** Share a reel to a bot Instagram account; Meta's Messenger Platform delivers a signed CDN URL via webhook - no scraping, no share sheet, works from any cloud IP. This is the more robust long-term ingestion path.
+- **Instagram DM webhook ingestion (built).** Share a reel to a bot Instagram account; Meta delivers a signed CDN URL via webhook - no scraping, no share sheet, works from any cloud IP. The most reliable path. Setup: [docs/instagram-webhook.md](docs/instagram-webhook.md).
 - Per-reel chat memory & tags · a tiny web dashboard · TikTok / YouTube Shorts support.
 
 Contributions welcome - open an issue or PR.

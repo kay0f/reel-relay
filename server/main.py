@@ -1,18 +1,22 @@
 """FastAPI app (ingest + debug endpoints) with the FastMCP server mounted under a token path."""
 import base64
+import hashlib
+import hmac
+import json
 import logging
 import secrets as pysecrets
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
+from fastapi.responses import PlainTextResponse
 from fastmcp import FastMCP
 from mcp.types import ImageContent, TextContent
 from pydantic import BaseModel
 
 from . import config, store
 from .frames import evenly_sample, load_manifest
-from .ingest import run_pipeline
+from .ingest import run_pipeline, run_pipeline_media
 from .transcribe import format_transcript
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -263,6 +267,7 @@ def ingest(body: IngestBody, request: Request, background: BackgroundTasks) -> d
     _check_secret(request)
     url = body.url.strip()
     if not url.lower().startswith(("http://", "https://")):
+        log.warning("rejected ingest (400): request body url was %r", body.url[:200])
         raise HTTPException(status_code=400, detail="url must be an http(s) URL")
     reel_id = store.create_reel(url)
     background.add_task(run_pipeline, reel_id, url)
@@ -285,3 +290,66 @@ def reel_detail(reel_id: str, request: Request) -> dict:
     if reel.get("frames_dir"):
         reel["frames"] = [e["t"] for e in load_manifest(Path(reel["frames_dir"]))]
     return reel
+
+
+# ---------------------------------------------------------------------------
+# Instagram DM webhook (Phase 1): share a reel to a bot account -> Meta pushes
+# the reel's CDN URL here -> we download + process it. No iOS Shortcut needed.
+# ---------------------------------------------------------------------------
+
+_REEL_ATTACHMENT_TYPES = {"ig_reel", "reel", "share", "video"}
+
+
+def _verify_meta_signature(raw: bytes, header: str) -> bool:
+    if not config.META_APP_SECRET or not header.startswith("sha256="):
+        return False
+    expected = "sha256=" + hmac.new(config.META_APP_SECRET.encode(), raw, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, header)
+
+
+def _extract_reel_urls(data: dict) -> list[tuple[str, str]]:
+    """Pull (cdn_url, title) for each shared reel in an Instagram messaging payload."""
+    out: list[tuple[str, str]] = []
+    for entry in data.get("entry") or []:
+        for msg in entry.get("messaging") or []:
+            message = msg.get("message") or {}
+            if message.get("is_echo"):
+                continue  # ignore our own outgoing messages echoed back
+            for att in message.get("attachments") or []:
+                if att.get("type") in _REEL_ATTACHMENT_TYPES:
+                    payload = att.get("payload") or {}
+                    url = payload.get("url")
+                    if url:
+                        out.append((url, (payload.get("title") or "").strip()))
+    return out
+
+
+@app.get("/webhook")
+def webhook_verify(request: Request):
+    """Meta's subscription handshake: echo hub.challenge when the verify token matches."""
+    p = request.query_params
+    if (
+        config.META_VERIFY_TOKEN
+        and p.get("hub.mode") == "subscribe"
+        and p.get("hub.verify_token") == config.META_VERIFY_TOKEN
+    ):
+        return PlainTextResponse(p.get("hub.challenge", ""))
+    raise HTTPException(status_code=403, detail="verification failed")
+
+
+@app.post("/webhook")
+async def webhook_receive(request: Request, background: BackgroundTasks):
+    raw = await request.body()
+    if not _verify_meta_signature(raw, request.headers.get("x-hub-signature-256", "")):
+        raise HTTPException(status_code=403, detail="invalid or missing signature")
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="invalid json")
+    # log the raw payload (truncated) so real Meta deliveries can be inspected during setup
+    log.info("webhook received: %s", json.dumps(data)[:1500])
+    for media_url, title in _extract_reel_urls(data):
+        reel_id = store.create_reel(media_url)
+        background.add_task(run_pipeline_media, reel_id, media_url, title)
+        log.info("[%s] queued from DM webhook (title=%r)", reel_id, title)
+    return PlainTextResponse("EVENT_RECEIVED")
