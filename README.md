@@ -20,7 +20,7 @@ Ever be doomscrolling reels, hit one with a genuinely good idea - for me it's us
 ## How it works
 
 ```
-  iPhone share sheet / Instagram DM
+  phone: Telegram bot  ·  iOS Shortcut  ·  Instagram DM
             │  POST /ingest {url}   (X-Ingest-Secret)
             ▼
    your server (localhost or a free cloud VM)
@@ -43,7 +43,7 @@ what's *shown*.
 
 ## Features
 
-- **Two ways to ingest** - an iOS Shortcut in your share sheet, or (more robust) share a reel to a bot Instagram account and let Meta's DM webhook push it straight to your server ([setup](docs/instagram-webhook.md)).
+- **Multiple ways to ingest** - forward a reel to a [Telegram bot](docs/telegram.md) (easiest, works on iOS *and* Android, no app review), an [iOS share-sheet Shortcut](shortcuts/README.md), or an [Instagram DM webhook](docs/instagram-webhook.md).
 - **Claude actually "watches" the video** - timestamped transcript + evenly-sampled, deduplicated frames delivered as MCP image content.
 - **Three MCP tools** tuned so Claude knows to grab "the reel I just shared" with zero ceremony.
 - **Free transcription** via Groq's `whisper-large-v3` (falls back to it only when a reel has no captions).
@@ -92,9 +92,10 @@ make mcp-url            # prints your connector URL: https://<tunnel-host>/mcp-<
 Add that URL in Claude → **Settings → Connectors → Add custom connector**. No OAuth - the
 long random path segment *is* the credential, so treat the URL as a secret.
 
-**Put it in your share sheet:** follow [shortcuts/README.md](shortcuts/README.md) to build the
-2-minute "Send to Claude" iOS Shortcut. Then: Instagram → any reel → Share → **Send to Claude**
-→ open Claude → *"what's in the reel I just shared?"*
+**Share reels to it.** Easiest is a **Telegram bot** — works on iOS *and* Android, no app
+review, ~2-minute setup: [docs/telegram.md](docs/telegram.md). Prefer something else? An
+[iOS share-sheet Shortcut](shortcuts/README.md) or the [Instagram DM webhook](docs/instagram-webhook.md).
+Then: share/forward a reel → open Claude → *"what's in the reel I just shared?"*
 
 ## Run it 24/7 for free (always-on cloud)
 
