@@ -12,7 +12,7 @@
 
 Ever be doomscrolling reels, hit one with a genuinely good idea - for me it's usually some insane UI demo - and I think *"I want Claude to build a demo"*... but you can't be bothered to pause, transcribe it, and explain it? So you save it to the graveyard folder you'll never open again.
 
-**reel-relay closes that gap.** Share the reel to your self-hosted endpoint (an iOS Shortcut in your share sheet, or an Instagram DM), and it lands in Claude as a **timestamped transcript plus sampled video frames** - so Claude can actually "watch" it and you can just say *"what's in the reel I just shared?"* Then take it further: *"research whether this tactic would work for my project"* or *"build the thing in that reel."*
+**reel-relay closes that gap.** Share the reel to your self-hosted endpoint (a Telegram bot, an iOS Shortcut, or an Instagram DM), and it lands in Claude as a **timestamped transcript plus sampled video frames** - so Claude can actually "watch" it and you can just say *"what's in the reel I just shared?"* Then take it further: *"research whether this tactic would work for my project"* or *"build the thing in that reel."*
 
 > The share gesture you already use 20 times a day - now one of the recipients is Claude.
 
