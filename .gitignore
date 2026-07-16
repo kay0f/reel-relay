@@ -1,0 +1,19 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# App data: SQLite db + extracted frames (regenerated at runtime) and real secrets
+data/
+.env
+
+# Generated ops files (rendered launchd plists containing local absolute paths)
+ops/rendered/
+
+# OS cruft
+.DS_Store
+
+# NOTE: .env.example is intentionally NOT ignored — it is the config template.
