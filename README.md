@@ -3,6 +3,7 @@
 **Forward an Instagram reel to Claude the same way you send it to a friend - then have Claude watch it, research it, and build what it shows.**
 
 <p>
+  <a href="https://github.com/siemd2/reel-relay/actions/workflows/tests.yml"><img alt="tests" src="https://github.com/siemd2/reel-relay/actions/workflows/tests.yml/badge.svg"></a>
   <img alt="Python 3.11+" src="https://img.shields.io/badge/python-3.11%2B-blue">
   <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-green">
   <img alt="MCP" src="https://img.shields.io/badge/Model_Context_Protocol-connector-8A2BE2">
