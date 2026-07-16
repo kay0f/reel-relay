@@ -135,8 +135,7 @@ All settings come from environment variables (see [`.env.example`](.env.example)
 
 ## Roadmap
 
-- **Instagram DM webhook ingestion (built).** Share a reel to a bot Instagram account; Meta delivers a signed CDN URL via webhook - no scraping, no share sheet, works from any cloud IP. The most reliable path. Setup: [docs/instagram-webhook.md](docs/instagram-webhook.md).
-- Per-reel chat memory & tags · a tiny web dashboard · TikTok / YouTube Shorts support.
+- Not sure, will evolve with needs.
 
 Contributions welcome - open an issue or PR.
 
