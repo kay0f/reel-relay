@@ -18,6 +18,10 @@ FRAMES_ROOT = DATA_DIR / "frames"
 HOST = os.getenv("HOST", "127.0.0.1")
 PORT = int(os.getenv("PORT", "8787"))
 
+# How many reels to process at once. A small default keeps a 1GB VM + Groq's
+# free-tier rate limit happy under bursts; extra shares queue and drain in order.
+WORKER_CONCURRENCY = int(os.getenv("WORKER_CONCURRENCY", "2"))
+
 # Optional: let yt-dlp reuse a logged-in browser session for reels that need auth,
 # e.g. YTDLP_COOKIES_FROM_BROWSER=safari (or chrome, firefox...). Off by default.
 YTDLP_COOKIES_FROM_BROWSER = os.getenv("YTDLP_COOKIES_FROM_BROWSER", "")
@@ -26,6 +30,12 @@ YTDLP_COOKIES_FROM_BROWSER = os.getenv("YTDLP_COOKIES_FROM_BROWSER", "")
 # bot Instagram account" ingestion path. When both are set, /webhook is active.
 META_APP_SECRET = os.getenv("META_APP_SECRET", "")        # verifies X-Hub-Signature-256
 META_VERIFY_TOKEN = os.getenv("META_VERIFY_TOKEN", "")    # for the GET webhook handshake
+
+# Telegram bot ingestion - share/forward a reel to your bot and it lands in Claude.
+# Far simpler than Meta: make a bot with @BotFather, no app review needed.
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")          # from @BotFather
+TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")  # verifies webhook calls
+TELEGRAM_ALLOWED_USER_ID = os.getenv("TELEGRAM_ALLOWED_USER_ID", "")  # optional: only accept from you
 
 # Frame extraction tuning
 FRAME_WIDTH = 512          # output JPEG width in px

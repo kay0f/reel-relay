@@ -1,7 +1,9 @@
 """Download + processing pipeline: yt-dlp (page URL) or direct media -> frames -> transcript -> SQLite."""
 import logging
+import queue as _queue
 import shutil
 import tempfile
+import threading
 from pathlib import Path
 
 import httpx
@@ -194,3 +196,36 @@ def run_pipeline_media(reel_id: str, media_url: str, title: str = "") -> None:
         shutil.rmtree(frames_dir, ignore_errors=True)
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# Bounded worker queue: process a few reels at a time so a burst of shares
+# (e.g. 15 reels in a minute) can't overwhelm a small VM or Groq's rate limit.
+# Extra reels wait in the queue as 'pending' and drain in order.
+# ---------------------------------------------------------------------------
+
+_job_queue: "_queue.Queue[tuple]" = _queue.Queue()
+
+
+def _worker_loop() -> None:
+    while True:
+        fn, args = _job_queue.get()
+        try:
+            fn(*args)
+        except Exception:  # noqa: BLE001 - one bad job must not kill the worker
+            log.exception("reel worker crashed on a job")
+        finally:
+            _job_queue.task_done()
+
+
+def start_workers(n: int = 2) -> None:
+    n = max(1, n)
+    for i in range(n):
+        threading.Thread(target=_worker_loop, name=f"reel-worker-{i}", daemon=True).start()
+    log.info("started %d reel pipeline worker(s)", n)
+
+
+def enqueue(fn, *args) -> int:
+    """Queue a pipeline job (run_pipeline / run_pipeline_media); returns queue depth."""
+    _job_queue.put((fn, args))
+    return _job_queue.qsize()

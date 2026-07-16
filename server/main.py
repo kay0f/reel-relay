@@ -14,9 +14,9 @@ from fastmcp import FastMCP
 from mcp.types import ImageContent, TextContent
 from pydantic import BaseModel
 
-from . import config, store
+from . import config, store, telegram
 from .frames import evenly_sample, load_manifest
-from .ingest import run_pipeline, run_pipeline_media
+from .ingest import enqueue, run_pipeline, run_pipeline_media, start_workers
 from .transcribe import format_transcript
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -226,6 +226,7 @@ async def lifespan(app: FastAPI):
     config.require_secrets()
     store.init_db()
     config.FRAMES_ROOT.mkdir(parents=True, exist_ok=True)
+    start_workers(config.WORKER_CONCURRENCY)
     stale = store.fail_stale_pending()
     if stale:
         log.warning("marked %d reel(s) stuck in 'pending' from a previous run as failed", stale)
@@ -270,7 +271,7 @@ def ingest(body: IngestBody, request: Request, background: BackgroundTasks) -> d
         log.warning("rejected ingest (400): request body url was %r", body.url[:200])
         raise HTTPException(status_code=400, detail="url must be an http(s) URL")
     reel_id = store.create_reel(url)
-    background.add_task(run_pipeline, reel_id, url)
+    enqueue(run_pipeline, reel_id, url)
     log.info("[%s] queued: %s", reel_id, url)
     return {"id": reel_id, "status": "pending"}
 
@@ -350,6 +351,50 @@ async def webhook_receive(request: Request, background: BackgroundTasks):
     log.info("webhook received: %s", json.dumps(data)[:1500])
     for media_url, title in _extract_reel_urls(data):
         reel_id = store.create_reel(media_url)
-        background.add_task(run_pipeline_media, reel_id, media_url, title)
+        enqueue(run_pipeline_media, reel_id, media_url, title)
         log.info("[%s] queued from DM webhook (title=%r)", reel_id, title)
     return PlainTextResponse("EVENT_RECEIVED")
+
+
+# ---------------------------------------------------------------------------
+# Telegram bot ingestion: share/forward a reel link to your bot -> it lands here.
+# Far simpler than Meta: a @BotFather bot, no app review or verification.
+# ---------------------------------------------------------------------------
+
+
+@app.post("/telegram/webhook")
+async def telegram_webhook(request: Request, background: BackgroundTasks):
+    if not config.TELEGRAM_WEBHOOK_SECRET or (
+        request.headers.get("x-telegram-bot-api-secret-token") != config.TELEGRAM_WEBHOOK_SECRET
+    ):
+        raise HTTPException(status_code=403, detail="invalid secret token")
+    update = await request.json()
+    msg = telegram.message_of(update)
+    chat_id = (msg.get("chat") or {}).get("id")
+    sender_id = str((msg.get("from") or {}).get("id", ""))
+
+    # optional owner lock: ignore anyone who isn't you
+    if config.TELEGRAM_ALLOWED_USER_ID and sender_id != str(config.TELEGRAM_ALLOWED_USER_ID):
+        return {"ok": True}
+
+    urls = telegram.extract_urls(update)
+    if not urls:
+        text = msg.get("text") or ""
+        if chat_id and (text.startswith("/start") or not text):
+            background.add_task(
+                telegram.send_message, chat_id,
+                f"Share or forward an Instagram reel to me and I'll add it to Claude. "
+                f"(your Telegram id is {sender_id})",
+            )
+        return {"ok": True}
+
+    for url in urls:
+        reel_id = store.create_reel(url)
+        enqueue(run_pipeline, reel_id, url)
+        log.info("[%s] queued from Telegram (sender %s): %s", reel_id, sender_id, url)
+    background.add_task(
+        telegram.send_message, chat_id,
+        f"Got it - processing {len(urls)} reel{'s' if len(urls) > 1 else ''}. "
+        "Ask Claude about it in ~30s.",
+    )
+    return {"ok": True}
