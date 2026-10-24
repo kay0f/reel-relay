@@ -10,9 +10,10 @@ import httpx
 from yt_dlp import YoutubeDL
 from yt_dlp.utils import DownloadError
 
-from . import config, store
+from . import carousel, config, store
+from .cookies import cookie_file
 from .frames import extract_frames, ffprobe_duration
-from .transcribe import extract_audio, parse_vtt, transcribe_with_groq
+from .transcribe import extract_audio_for_upload, parse_vtt, stt_source_label, transcribe_audio
 
 log = logging.getLogger("reel-relay.ingest")
 
@@ -33,7 +34,7 @@ def download_video(url: str, workdir: Path) -> tuple[Path, dict]:
         "writeautomaticsub": True,
         # exact matches only: "en.*" pulls piles of translated variants, each an extra
         # request that can 429 (yt-dlp matches these as regexes)
-        "subtitleslangs": ["en", "en-orig"],
+        "subtitleslangs": ["en", "en-orig", "ru", "ru-orig"],
         "subtitlesformat": "vtt",
         "noplaylist": True,
         "quiet": True,
@@ -41,17 +42,20 @@ def download_video(url: str, workdir: Path) -> tuple[Path, dict]:
     }
     if config.YTDLP_COOKIES_FROM_BROWSER:
         opts["cookiesfrombrowser"] = (config.YTDLP_COOKIES_FROM_BROWSER,)
-    try:
-        with YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-    except DownloadError as e:
-        # Captions are best-effort, but yt-dlp fetches them BEFORE the video and a
-        # single failed subtitle request (timedtext 429s are common) aborts the whole
-        # download. Retry once without captions; whisper covers the transcript.
-        log.warning("download failed (%s); retrying without captions", e)
-        opts_nosubs = {**opts, "writesubtitles": False, "writeautomaticsub": False}
-        with YoutubeDL(opts_nosubs) as ydl:
-            info = ydl.extract_info(url, download=True)
+    with cookie_file() as cookies:
+        if cookies is not None:
+            opts["cookiefile"] = str(cookies)
+        try:
+            with YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+        except DownloadError as e:
+            # Captions are best-effort, but yt-dlp fetches them BEFORE the video and a
+            # single failed subtitle request (timedtext 429s are common) aborts the whole
+            # download. Retry once without captions; whisper covers the transcript.
+            log.warning("download failed (%s); retrying without captions", e)
+            opts_nosubs = {**opts, "writesubtitles": False, "writeautomaticsub": False}
+            with YoutubeDL(opts_nosubs) as ydl:
+                info = ydl.extract_info(url, download=True)
     if info is None:
         raise RuntimeError("yt-dlp returned no info for this URL")
     if info.get("_type") == "playlist":
@@ -93,17 +97,30 @@ def download_media(url: str, out_path: Path) -> Path:
 
 
 def find_caption_file(workdir: Path) -> Path | None:
-    """Pick the best caption file: plain 'en', then 'en-orig', then anything else."""
+    """Pick the best caption file: 'en', 'en-orig', 'ru', 'ru-orig', then anything else."""
+    preferred = (".en.vtt", ".en-orig.vtt", ".ru.vtt", ".ru-orig.vtt")
+
     def rank(p: Path) -> tuple:
         name = p.name.lower()
-        return (not name.endswith(".en.vtt"), not name.endswith(".en-orig.vtt"), name)
+        hits = [i for i, suffix in enumerate(preferred) if name.endswith(suffix)]
+        return (hits[0] if hits else len(preferred), name)
 
     candidates = sorted(workdir.glob("*.vtt"), key=rank)
     return candidates[0] if candidates else None
 
 
+def _transcribe_video(video: Path, workdir: Path) -> list[dict]:
+    """Speech-to-text for one video file via the configured STT endpoint."""
+    audio = extract_audio_for_upload(video, workdir)
+    try:
+        duration = ffprobe_duration(video)
+    except Exception:  # noqa: BLE001
+        duration = 0.0
+    return transcribe_audio(audio, config.stt_api_key(), duration=duration)
+
+
 def _build_transcript(video: Path, workdir: Path) -> tuple[list[dict], str, str | None]:
-    """Returns (segments, source, warning). Captions first, then Groq whisper."""
+    """Returns (segments, source, warning). Captions first, then Whisper (STT_*)."""
     vtt = find_caption_file(workdir)
     if vtt is not None:
         try:
@@ -113,19 +130,25 @@ def _build_transcript(video: Path, workdir: Path) -> tuple[list[dict], str, str 
         except Exception as e:  # noqa: BLE001 - captions are best-effort
             log.warning("caption parse failed (%s), falling back to whisper", e)
 
-    if not config.GROQ_API_KEY:
-        return [], "none", "no captions found and GROQ_API_KEY is not set; transcript empty"
+    if not config.stt_api_key():
+        return [], "none", "no captions found and STT_API_KEY is not set; transcript empty"
     try:
-        audio = extract_audio(video, workdir / "audio.mp3")
-        segments = transcribe_with_groq(audio, config.GROQ_API_KEY)
-        return segments, f"groq/{config.GROQ_WHISPER_MODEL}", None
+        segments = _transcribe_video(video, workdir)
+        return segments, stt_source_label(), None
     except Exception as e:  # noqa: BLE001 - keep frames usable even if audio fails
         log.warning("transcription failed: %s", e)
         return [], "none", f"transcription failed: {e}"
 
 
 def _process_video(
-    reel_id: str, video: Path, workdir: Path, *, title: str, uploader: str, duration: float
+    reel_id: str,
+    video: Path,
+    workdir: Path,
+    *,
+    title: str,
+    uploader: str,
+    duration: float,
+    description: str = "",
 ) -> None:
     """Shared core: extract frames + transcript, then persist. Raises on frames failure."""
     frames_dir = config.FRAMES_ROOT / reel_id
@@ -145,6 +168,8 @@ def _process_video(
         transcript_source=source,
         frames_dir=str(frames_dir),
         warning=warning,
+        description=description,
+        media_type="video",
     )
     log.info(
         "[%s] ready: %d frames, %d transcript segments (%s)%s",
@@ -153,12 +178,54 @@ def _process_video(
     )
 
 
+def _process_post(reel_id: str, url: str, workdir: Path) -> None:
+    """Instagram post (/p/): carousel or single image/video via gallery-dl."""
+    items = carousel.download_post(url, workdir)
+    info = carousel.post_info(items)
+    frames_dir = config.FRAMES_ROOT / reel_id
+    if frames_dir.exists():
+        shutil.rmtree(frames_dir)
+    manifest, videos = carousel.build_slides(items, frames_dir)
+    if not manifest:
+        raise RuntimeError("no slides could be extracted from the post")
+
+    transcript: list[dict] = []
+    warning: str | None = None
+    if videos and config.stt_api_key():
+        for slide_no, video in videos:
+            try:
+                for seg in _transcribe_video(video, workdir):
+                    transcript.append({**seg, "text": f"[slide {slide_no}] {seg['text']}"})
+            except Exception as e:  # noqa: BLE001 - slides stay usable
+                warning = f"transcription failed for slide {slide_no}: {e}"
+                log.warning("[%s] %s", reel_id, warning)
+    elif videos:
+        warning = "post has video slides but STT_API_KEY is not set; no transcript"
+
+    store.mark_ready(
+        reel_id,
+        title=info["title"] or "Instagram post",
+        uploader=info["uploader"],
+        duration_s=float(len(manifest)),
+        transcript=transcript,
+        transcript_source=stt_source_label() if transcript else "none",
+        frames_dir=str(frames_dir),
+        warning=warning,
+        description=info["description"],
+        media_type="carousel",
+    )
+    log.info("[%s] ready: carousel with %d slides", reel_id, len(manifest))
+
+
 def run_pipeline(reel_id: str, url: str) -> None:
-    """Background task (share-sheet / manual URL): yt-dlp download, then process."""
+    """Background task (share-sheet / manual URL): yt-dlp or gallery-dl, then process."""
     log.info("[%s] ingest started: %s", reel_id, url)
     workdir = Path(tempfile.mkdtemp(prefix=f"reel-{reel_id}-"))
     frames_dir = config.FRAMES_ROOT / reel_id
     try:
+        if carousel.is_instagram_post(url):
+            _process_post(reel_id, url, workdir)
+            return
         video, info = download_video(url, workdir)
         title = (info.get("title") or "").strip() or url
         uploader = (info.get("uploader") or info.get("channel") or info.get("uploader_id") or "").strip()
@@ -166,7 +233,11 @@ def run_pipeline(reel_id: str, url: str) -> None:
             duration = ffprobe_duration(video)
         except Exception:  # noqa: BLE001
             duration = float(info.get("duration") or 0.0)
-        _process_video(reel_id, video, workdir, title=title, uploader=uploader, duration=duration)
+        _process_video(
+            reel_id, video, workdir,
+            title=title, uploader=uploader, duration=duration,
+            description=(info.get("description") or "").strip(),
+        )
     except Exception as e:  # noqa: BLE001 - background task must record its own failure
         log.exception("[%s] ingest failed", reel_id)
         store.mark_failed(reel_id, f"{type(e).__name__}: {e}")
@@ -200,7 +271,7 @@ def run_pipeline_media(reel_id: str, media_url: str, title: str = "") -> None:
 
 # ---------------------------------------------------------------------------
 # Bounded worker queue: process a few reels at a time so a burst of shares
-# (e.g. 15 reels in a minute) can't overwhelm a small VM or Groq's rate limit.
+# (e.g. 15 reels in a minute) can't overwhelm a small VM or the STT rate limit.
 # Extra reels wait in the queue as 'pending' and drain in order.
 # ---------------------------------------------------------------------------
 

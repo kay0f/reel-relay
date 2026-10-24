@@ -1,0 +1,28 @@
+# reel-relay service for the existing compose project on the NAS
+# (/volume1/docker/librechat/compose.yaml). Merge this block under `services:` there,
+# or run it standalone on the same network:
+#   docker compose -f deploy/compose.nas.yml up -d --build
+#
+# Open WebUI (same network) reaches MCP at:  http://reel-relay:8787/mcp-<MCP_PATH_TOKEN>/mcp
+# No host port is published: the server is reachable only inside the Docker network
+# until you deliberately add a tunnel for claude.ai.
+services:
+  reel-relay:
+    build:
+      context: /volume1/docker/reel-relay/src      # git clone of kay0f/reel-relay
+    container_name: reel-relay
+    restart: unless-stopped
+    env_file:
+      - /volume1/docker/reel-relay/.env            # from deploy/.env.nas.example, chmod 600
+    volumes:
+      - /volume1/docker/reel-relay/data:/data
+      - /volume1/docker/reel-relay/secrets:/secrets:ro   # instagram_cookies.txt lives here
+    networks:
+      - default
+
+# When merging into the librechat project, drop this block (the project's default
+# network is used). For a standalone run, join the librechat network instead:
+networks:
+  default:
+    name: librechat_default
+    external: true

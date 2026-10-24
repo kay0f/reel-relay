@@ -1,0 +1,10 @@
+.git
+.venv
+data
+.env
+deploy/.env*
+!deploy/.env.nas.example
+tests
+__pycache__
+*.pyc
+ops/rendered

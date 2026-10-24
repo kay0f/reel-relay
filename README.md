@@ -1,3 +1,5 @@
+> **Форк kay0f:** cookies из файла, транскрипция через NanoGPT (любой OpenAI-совместимый Whisper), карусели `/p/` через gallery-dl, подпись автора, MCP-инструмент `add_reel(url)` и Docker для NAS. См. [docs/NAS.md](docs/NAS.md).
+
 # reel-relay
 
 **Forward an Instagram reel to Claude the same way you send it to a friend - then have Claude watch it, research it, and build what it shows.**

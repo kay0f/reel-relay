@@ -1,4 +1,5 @@
 """FastAPI app (ingest + debug endpoints) with the FastMCP server mounted under a token path."""
+import asyncio
 import base64
 import hashlib
 import hmac
@@ -7,6 +8,7 @@ import logging
 import secrets as pysecrets
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import urlparse
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.responses import PlainTextResponse
@@ -29,11 +31,14 @@ log = logging.getLogger("reel-relay")
 mcp = FastMCP(
     name="reel-relay",
     instructions=(
-        "Instagram reels (and other short videos) the user shared from their phone. "
-        "Each reel is stored as a timestamped transcript plus video frames, so you can "
-        "'watch' it. When the user says 'the reel I just shared/sent you', call get_reel "
-        "with no reel_id - that returns the most recent one. Use list_recent_reels to "
-        "browse, and get_reel_frames to zoom into a specific time window."
+        "Instagram reels, posts and carousels the user shared. Each item is stored as a "
+        "timestamped transcript plus video frames (or carousel slides) and the author's "
+        "caption, so you can 'watch' it. When the user pastes an instagram.com link in "
+        "the chat, call add_reel with it - it downloads, processes and returns the item. "
+        "When the user says 'the reel I just shared/sent you', call get_reel with no "
+        "reel_id - that returns the most recent one. Use list_recent_reels to browse, "
+        "and get_reel_frames to zoom into a specific time window. Never describe or "
+        "summarise a reel you could not retrieve: if a tool reports a failure, say so."
     ),
 )
 
@@ -77,17 +82,31 @@ def _reel_or_message(reel_id: str | None) -> tuple[dict | None, str | None]:
     return None, msg
 
 
+def _is_carousel(reel: dict) -> bool:
+    return reel.get("media_type") == "carousel"
+
+
 def _reel_header(reel: dict) -> str:
     lines = [
         f"Title: {reel.get('title') or '(untitled)'}",
         f"Uploader: {reel.get('uploader') or '(unknown)'}",
         f"URL: {reel['url']}",
-        f"Duration: {reel.get('duration_s') or '?'}s",
+    ]
+    if _is_carousel(reel):
+        lines.append(
+            f"Type: carousel/post with {int(reel.get('duration_s') or 0)} slide(s); "
+            "frame labels give the slide number, not seconds"
+        )
+    else:
+        lines.append(f"Duration: {reel.get('duration_s') or '?'}s")
+    lines += [
         f"Shared at: {reel['created_at']} (id {reel['id']})",
         f"Transcript source: {reel.get('transcript_source') or 'none'}",
     ]
     if reel.get("error"):
         lines.append(f"Warning: {reel['error']}")
+    description = (reel.get("description") or "").strip()
+    lines.append("Author's caption:\n" + (description if description else "(none)"))
     return "\n".join(lines)
 
 
@@ -110,13 +129,18 @@ def _frame_blocks(reel: dict, entries: list[dict]) -> tuple[str, list]:
     if not loaded:
         return "No frames available.", []
     blocks: list = []
+    carousel = _is_carousel(reel)
     for n, (t, image) in enumerate(loaded, start=1):
-        blocks.append(TextContent(type="text", text=f"[frame {n}/{len(loaded)} - t={t:g}s]"))
+        label = f"slide {t:g}" if carousel else f"t={t:g}s"
+        blocks.append(TextContent(type="text", text=f"[frame {n}/{len(loaded)} - {label}]"))
         blocks.append(image)
-    summary = (
-        f"{len(loaded)} frames follow in chronological order, each preceded by a "
-        f"label with its timestamp in seconds."
-    )
+    if carousel:
+        summary = f"{len(loaded)} slides follow in order, each preceded by its slide number."
+    else:
+        summary = (
+            f"{len(loaded)} frames follow in chronological order, each preceded by a "
+            f"label with its timestamp in seconds."
+        )
     return summary, blocks
 
 
@@ -148,6 +172,27 @@ def list_recent_reels(limit: int = 10) -> list[dict]:
     return out
 
 
+def _get_reel_impl(reel_id: str | None = None, include_frames: bool = True, max_frames: int = 10):
+    """Shared implementation of get_reel (also used by add_reel)."""
+    reel, message = _reel_or_message(reel_id)
+    if reel is None:
+        return [TextContent(type="text", text=message)]
+
+    text = _reel_header(reel) + "\n\nTranscript:\n" + format_transcript(reel.get("transcript") or [])
+    blocks: list = []
+    if include_frames:
+        if _is_carousel(reel):
+            max_frames = max(int(max_frames), 20)  # slide text IS the content: show all
+        max_frames = max(1, min(int(max_frames), 20))
+        entries = evenly_sample(load_manifest(Path(reel["frames_dir"])), max_frames)
+        summary, frame_blocks = _frame_blocks(reel, entries)
+        blocks.append(TextContent(type="text", text=text + "\n\n" + summary))
+        blocks.extend(frame_blocks)
+    else:
+        blocks.append(TextContent(type="text", text=text))
+    return blocks
+
+
 @mcp.tool
 def get_reel(reel_id: str | None = None, include_frames: bool = True, max_frames: int = 10):
     """Watch a reel the user shared: full timestamped transcript + frames from the video.
@@ -159,21 +204,7 @@ def get_reel(reel_id: str | None = None, include_frames: bool = True, max_frames
     for a closer look at a specific time window instead of raising max_frames.
     Set include_frames=false for transcript-only.
     """
-    reel, message = _reel_or_message(reel_id)
-    if reel is None:
-        return [TextContent(type="text", text=message)]
-
-    text = _reel_header(reel) + "\n\nTranscript:\n" + format_transcript(reel.get("transcript") or [])
-    blocks: list = []
-    if include_frames:
-        max_frames = max(1, min(int(max_frames), 20))
-        entries = evenly_sample(load_manifest(Path(reel["frames_dir"])), max_frames)
-        summary, frame_blocks = _frame_blocks(reel, entries)
-        blocks.append(TextContent(type="text", text=text + "\n\n" + summary))
-        blocks.extend(frame_blocks)
-    else:
-        blocks.append(TextContent(type="text", text=text))
-    return blocks
+    return _get_reel_impl(reel_id, include_frames, max_frames)
 
 
 @mcp.tool
@@ -212,6 +243,79 @@ def get_reel_frames(
     summary, frame_blocks = _frame_blocks(reel, evenly_sample(window, max_frames))
     header = f"Reel '{reel.get('title') or reel['url']}' - window {start_s:g}s-{end_s:g}s. {summary}"
     return [TextContent(type="text", text=header), *frame_blocks]
+
+
+def normalize_instagram_url(url: str) -> str | None:
+    """https://instagram.com/<kind>/<code>/ without tracking params; None if not allowed."""
+    parsed = urlparse(url.strip())
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme not in ("http", "https") or host not in config.ALLOWED_INGEST_HOSTS:
+        return None
+    parts = [p for p in parsed.path.split("/") if p]
+    if len(parts) >= 2 and parts[0] in ("reel", "reels", "p", "tv"):
+        kind = "reel" if parts[0] == "reels" else parts[0]
+        return f"https://www.instagram.com/{kind}/{parts[1]}/"
+    if host.endswith("instagram.com"):
+        return None  # profiles, stories, explore... are not supported
+    return parsed._replace(fragment="").geturl()
+
+
+@mcp.tool
+async def add_reel(url: str, wait_s: int = 60):
+    """Fetch an Instagram reel or post (carousel) from a link the user pasted, then watch it.
+
+    Downloads and processes the item (video -> transcript + frames; carousel -> slides),
+    waiting up to wait_s seconds, and returns the same result as get_reel. If processing
+    takes longer it returns the reel id - call get_reel with it a bit later. Links that
+    were already processed are returned immediately. Only instagram.com links are accepted.
+    """
+    clean = normalize_instagram_url(url)
+    if clean is None:
+        return [
+            TextContent(
+                type="text",
+                text=(
+                    "Unsupported link. add_reel accepts Instagram reel/post links like "
+                    "https://www.instagram.com/reel/<code>/ or https://www.instagram.com/p/<code>/."
+                ),
+            )
+        ]
+
+    existing = store.find_by_url(clean)
+    if existing is not None and existing["status"] == "ready":
+        return _get_reel_impl(existing["id"])
+    reel_id = existing["id"] if existing is not None else store.create_reel(clean)
+    if existing is None:
+        enqueue(run_pipeline, reel_id, clean)
+        log.info("[%s] queued from add_reel: %s", reel_id, clean)
+
+    deadline = max(5, min(int(wait_s), 110))
+    for _ in range(deadline // 2):
+        await asyncio.sleep(2)
+        reel = store.get_reel(reel_id)
+        if reel is None:
+            break
+        if reel["status"] == "ready":
+            return _get_reel_impl(reel_id)
+        if reel["status"] == "failed":
+            return [
+                TextContent(
+                    type="text",
+                    text=(
+                        f"Could not process {clean}: {reel.get('error') or 'unknown error'}. "
+                        "Do not guess its content."
+                    ),
+                )
+            ]
+    return [
+        TextContent(
+            type="text",
+            text=(
+                f"Still processing {clean} (id {reel_id}). Call get_reel(reel_id='{reel_id}') "
+                "in ~30 seconds."
+            ),
+        )
+    ]
 
 
 # ---------------------------------------------------------------------------

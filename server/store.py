@@ -19,7 +19,9 @@ CREATE TABLE IF NOT EXISTS reels (
     transcript_source TEXT,
     frames_dir TEXT,
     status TEXT NOT NULL DEFAULT 'pending',
-    error TEXT
+    error TEXT,
+    description TEXT,
+    media_type TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_reels_created_at ON reels(created_at DESC);
 """
@@ -33,9 +35,20 @@ def _connect() -> sqlite3.Connection:
     return conn
 
 
+# Columns added after the first release; older databases get them via ALTER TABLE.
+_MIGRATIONS = {
+    "description": "ALTER TABLE reels ADD COLUMN description TEXT",
+    "media_type": "ALTER TABLE reels ADD COLUMN media_type TEXT",
+}
+
+
 def init_db() -> None:
     with closing(_connect()) as conn, conn:
         conn.executescript(SCHEMA)
+        existing = {row["name"] for row in conn.execute("PRAGMA table_info(reels)")}
+        for column, ddl in _MIGRATIONS.items():
+            if column not in existing:
+                conn.execute(ddl)
 
 
 def _row_to_dict(row: sqlite3.Row) -> dict:
@@ -69,11 +82,14 @@ def mark_ready(
     transcript_source: str,
     frames_dir: str,
     warning: str | None = None,
+    description: str = "",
+    media_type: str = "video",
 ) -> None:
     with closing(_connect()) as conn, conn:
         conn.execute(
             """UPDATE reels SET title=?, uploader=?, duration_s=?, transcript_json=?,
-               transcript_source=?, frames_dir=?, status='ready', error=? WHERE id=?""",
+               transcript_source=?, frames_dir=?, status='ready', error=?,
+               description=?, media_type=? WHERE id=?""",
             (
                 title,
                 uploader,
@@ -82,6 +98,8 @@ def mark_ready(
                 transcript_source,
                 frames_dir,
                 warning,
+                description,
+                media_type,
                 reel_id,
             ),
         )
@@ -135,3 +153,15 @@ def list_reels(limit: int = 10) -> list[dict]:
             "SELECT * FROM reels ORDER BY created_at DESC, rowid DESC LIMIT ?", (limit,)
         ).fetchall()
     return [_row_to_dict(r) for r in rows]
+
+
+def find_by_url(url: str, statuses: tuple[str, ...] = ("ready", "pending")) -> dict | None:
+    """Newest reel with exactly this URL in one of the given statuses (dedup for add_reel)."""
+    marks = ",".join("?" for _ in statuses)
+    with closing(_connect()) as conn:
+        row = conn.execute(
+            f"SELECT * FROM reels WHERE url=? AND status IN ({marks}) "
+            "ORDER BY created_at DESC, rowid DESC LIMIT 1",
+            (url, *statuses),
+        ).fetchone()
+    return _row_to_dict(row) if row else None

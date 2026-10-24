@@ -1,4 +1,4 @@
-"""Transcription: caption (VTT) parsing, audio extraction, Groq whisper-large-v3."""
+"""Transcription: caption (VTT) parsing, audio extraction, OpenAI-compatible Whisper (NanoGPT/Groq)."""
 import logging
 import re
 import subprocess
@@ -84,8 +84,12 @@ def parse_vtt(text: str) -> list[dict]:
     return segments
 
 
-def parse_groq_verbose_json(data: dict) -> list[dict]:
-    """Normalize a Groq/OpenAI verbose_json transcription response."""
+def parse_groq_verbose_json(data: dict, fallback_duration: float = 0.0) -> list[dict]:
+    """Normalize an OpenAI-compatible (Groq/NanoGPT/OpenAI) transcription response.
+
+    Accepts verbose_json (segments with timestamps) or plain json ({"text": ...});
+    NanoGPT's native shape ({"transcription": ...}) is accepted too.
+    """
     segments = data.get("segments")
     out: list[dict] = []
     if isinstance(segments, list):
@@ -104,23 +108,23 @@ def parse_groq_verbose_json(data: dict) -> list[dict]:
             except (KeyError, TypeError, ValueError):
                 continue
     if not out:
-        text = str(data.get("text") or "").strip()
+        text = str(data.get("text") or data.get("transcription") or "").strip()
         if text:
             try:
-                end = round(float(data.get("duration") or 0.0), 2)
+                end = round(float(data.get("duration") or fallback_duration or 0.0), 2)
             except (TypeError, ValueError):
                 end = 0.0
             out = [{"start": 0.0, "end": end, "text": text}]
     return out
 
 
-def extract_audio(video: Path, out_mp3: Path) -> Path:
-    """Mono 16 kHz 64 kbps mp3 - small enough for Groq's upload limits."""
+def extract_audio(video: Path, out_mp3: Path, bitrate: str = "64k") -> Path:
+    """Mono 16 kHz mp3 - small enough for typical STT upload limits (NanoGPT: ~3 MB)."""
     proc = subprocess.run(
         [
             "ffmpeg", "-v", "error",
             "-i", str(video),
-            "-vn", "-ac", "1", "-ar", "16000", "-b:a", "64k",
+            "-vn", "-ac", "1", "-ar", "16000", "-b:a", bitrate,
             "-y", str(out_mp3),
         ],
         capture_output=True,
@@ -131,22 +135,64 @@ def extract_audio(video: Path, out_mp3: Path) -> Path:
     return out_mp3
 
 
-def transcribe_with_groq(audio: Path, api_key: str) -> list[dict]:
+def extract_audio_for_upload(video: Path, workdir: Path) -> Path:
+    """Extract audio, re-encoding at a lower bitrate if it exceeds the upload limit."""
+    audio = extract_audio(video, workdir / "audio.mp3")
+    for bitrate in ("32k", "16k"):
+        if audio.stat().st_size <= config.STT_MAX_UPLOAD_BYTES:
+            break
+        audio = extract_audio(video, workdir / f"audio_{bitrate}.mp3", bitrate=bitrate)
+    if audio.stat().st_size > config.STT_MAX_UPLOAD_BYTES:
+        raise RuntimeError(
+            f"audio is {audio.stat().st_size} bytes even at 16 kbps; over the "
+            f"{config.STT_MAX_UPLOAD_BYTES}-byte upload limit"
+        )
+    return audio
+
+
+def _post_transcription(audio: Path, api_key: str, response_format: str) -> httpx.Response:
+    data = {"model": config.STT_MODEL, "response_format": response_format, "temperature": "0"}
+    if config.STT_LANGUAGE:
+        data["language"] = config.STT_LANGUAGE
     with open(audio, "rb") as f:
-        resp = httpx.post(
-            config.GROQ_TRANSCRIPTION_URL,
+        return httpx.post(
+            config.STT_API_URL,
             headers={"Authorization": f"Bearer {api_key}"},
             files={"file": (audio.name, f, "audio/mpeg")},
-            data={
-                "model": config.GROQ_WHISPER_MODEL,
-                "response_format": "verbose_json",
-                "temperature": "0",
-            },
+            data=data,
             timeout=httpx.Timeout(180.0, connect=15.0),
         )
+
+
+def transcribe_audio(audio: Path, api_key: str, duration: float = 0.0) -> list[dict]:
+    """Transcribe via the configured OpenAI-compatible endpoint.
+
+    Asks for verbose_json (timestamped segments); if the provider rejects that format,
+    retries with plain json and returns one segment spanning the whole clip.
+    """
+    resp = _post_transcription(audio, api_key, "verbose_json")
+    if resp.status_code in (400, 415, 422):
+        log.info("verbose_json rejected (%s); retrying with json", resp.status_code)
+        resp = _post_transcription(audio, api_key, "json")
     if resp.status_code != 200:
-        raise RuntimeError(f"Groq transcription failed ({resp.status_code}): {resp.text[:300]}")
-    return parse_groq_verbose_json(resp.json())
+        raise RuntimeError(f"transcription failed ({resp.status_code}): {resp.text[:300]}")
+    try:
+        data = resp.json()
+    except ValueError:
+        data = {"text": resp.text}
+    if not isinstance(data, dict):
+        data = {"text": str(data)}
+    return parse_groq_verbose_json(data, fallback_duration=duration)
+
+
+def transcribe_with_groq(audio: Path, api_key: str) -> list[dict]:
+    """Backward-compatible alias (the endpoint is now configurable via STT_*)."""
+    return transcribe_audio(audio, api_key)
+
+
+def stt_source_label() -> str:
+    host = httpx.URL(config.STT_API_URL).host or "stt"
+    return f"{host.removeprefix('api.')}/{config.STT_MODEL}"
 
 
 def _fmt_ts(seconds: float) -> str:
